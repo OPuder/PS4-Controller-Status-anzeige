@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <title>PS4 Akkustand</title>
+    <style>
+      body {
+        font-family: sans-serif;
+        text-align: center;
+        padding-top: 20px;
+      }
+      button {
+        margin-top: 10px;
+        padding: 5px 10px;
+        font-size: 16px;
+      }
+      p {
+        font-size: 20px;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>PS4 Akku</h1>
+    <p id="output" style="font-size: 20px; font-weight: bold;">Noch nichts geladen</p>
+    <p id="status" style="font-weight: bold; color: gray;">Status: wird überprüft...</p>
+    <p id="warning" style="color: red; font-weight: bold; display: none;">⚠️ Akku fast leer!</p>
+
+<div id="bar-container" style="width: 80%; height: 20px; margin: 0 auto; background: #ccc; border-radius: 10px;">
+  <div id="battery-bar" style="height: 100%; width: 0%; border-radius: 10px;"></div>
+</div>
+    <button onclick="loadBattery()">Akkustand prüfen</button>
+
+    <script>
+      function getColor(level) {
+        if (level > 60) return 'limegreen';
+        if (level > 30) return 'orange';
+        return 'red';
+      }
+    
+      async function updateBattery() {
+        const result = await window.batteryAPI.getBattery();
+    
+        const output = document.getElementById('output');
+        const bar = document.getElementById('battery-bar');
+        const warning = document.getElementById('warning');
+        const status = document.getElementById('status');
+    
+        if (result !== null) {
+          const { level, charging } = result;
+    
+          output.innerText = `Akkustand: ${level}% ${charging ? '⚡ Wird geladen...' : ''}`;
+          bar.style.width = `${level}%`;
+          bar.style.backgroundColor = getColor(level);
+    
+          warning.style.display = level <= 20 ? 'block' : 'none';
+    
+          status.innerText = "✅ Controller verbunden";
+          status.style.color = "green";
+        } else {
+          output.innerText = 'Noch nichts geladen';
+          bar.style.width = '0%';
+          bar.style.backgroundColor = 'transparent';
+          warning.style.display = 'none';
+          status.innerText = "❌ Kein Controller gefunden";
+          status.style.color = "red";
+        }
+      }
+
+      updateBattery();
+      setInterval(updateBattery, 5000);
+
+      function loadBattery() {
+        updateBattery();
+      }
+    </script>
+  </body>
+</html>
