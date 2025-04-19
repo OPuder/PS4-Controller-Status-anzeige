@@ -36,9 +36,9 @@
     </style>
   </head>
   <body>
-    <h1>PS4 Akku</h1>
-    <p id="output" style="font-size: 20px; font-weight: bold;">Noch nichts geladen</p>
-    <p id="status" style="font-weight: bold; color: gray;">Status: wird überprüft...</p>
+    <h1>PS4 Akku Status</h1>
+    <p id="output" style="font-size: 20px; font-weight: bold;"></p>
+    <p id="status" style="font-weight: bold; color: gray;"></p>
     <p id="warning" style="color: red; font-weight: bold; display: none;">⚠️ Akku fast leer!</p>
     
     <div id="bar-container">
@@ -46,7 +46,7 @@
     </div>
 
     <button onclick="loadBattery()">Akkustand prüfen</button>
-  </body>
+
     <script>
       function getColor(level) {
         if (level > 60) return 'limegreen';
@@ -63,6 +63,15 @@
         status.innerText = "✅ Controller verbunden";
         status.style.color = "green";
       }
+
+      function renderDisconnected() {
+        output.innerText = 'Akkustand: Nicht verfügbar';
+        bar.style.width = '0%';
+        bar.style.backgroundColor = 'gray';
+        warning.style.display = 'none';
+        status.innerText = '❌ Controller getrennt';
+        status.style.color = 'gray';
+      }
     
       const output  = document.getElementById('output');
       const bar     = document.getElementById('battery-bar');
@@ -74,17 +83,16 @@
         render(info);
       });
     
-        // 1b) Disconnect‑Updates abonnieren
-        window.batteryAPI.onBatteryDisconnect(() => {
-          console.log('[renderer] received battery-disconnected');
-          renderDisconnected();
-        });
-
+      // 1b) Disconnect‑Updates abonnieren
+      window.batteryAPI.onBatteryDisconnect(() => {
+        renderDisconnected();
+      });
 
       // 2) Manuellen Abruf erhalten (Button)
       async function loadBattery() {
         const info = await window.batteryAPI.getBattery();
         if (info) render(info);
+        else renderDisconnected();
       }
     
       // 3) Den Button-Handler setzen
@@ -93,4 +101,5 @@
       // 4) Optional: Beim Start sofort manuell abrufen
       loadBattery();
     </script>
+  </body>
 </html>

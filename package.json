@@ -20,7 +20,7 @@
     "typescript": "^5.8.3"
   },
   "build": {
-    "appId": "com.Puder.ps4-akku-monitor",
+    "appId": "ps4-akku-monitor",
     "productName": "PS4 Akku Monitor",
     "files": [
       "main.js",
