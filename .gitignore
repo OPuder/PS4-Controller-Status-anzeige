@@ -1,4 +1,5 @@
 # Compiled output
+/release-builds
 /dist
 /tmp
 /out-tsc

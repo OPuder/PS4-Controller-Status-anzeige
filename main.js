@@ -41,62 +41,79 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, ge
         step((generator = generator.apply(thisArg, _arguments || [])).next());
     });
 };
+var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
+};
 Object.defineProperty(exports, "__esModule", { value: true });
 const electron_1 = require("electron");
 const path = __importStar(require("path"));
-const dgram = __importStar(require("dgram"));
-// function readBatteryLevel(): { level: number, charging: boolean } | null {
-//   const devices = HID.devices().filter(d => d.vendorId === 0x054C && d.path);
-//   for (const d of devices) {
-//     try {
-//       const device = new HID.HID(d.path!);
-//       const data = device.readSync();
-//       device.close();
-//       // Debug: Zeige ersten 40 Bytes
-//       console.log(`_____________________________________________________________`);
-//       console.log(`device.interface=${d.interface}, rawData:`, data.slice(0, 40));
-//       if (data.length > 35) {
-//         const rawByte = data[30];
-//         const level = Math.min(Math.round((rawByte / 32) * 100), 100);
-//         const charging = data[35] > 0;
-//         console.log(`Raw battery byte: ${rawByte} → interpreted: ${level}%`);
-//         console.log(``);
-//         console.log(`Akkustand gefunden in device with interface=${d.interface}`);
-//         console.log(`_____________________________________________________________`);
-//         return { level, charging };
-//       }
-//     } catch (err) {
-//       console.log(`Gerät (interface=${d.interface}) konnte nicht gelesen werden.`);
-//     }
-//   }
-//   console.log("Kein Gerät mit Akkustand gefunden.");
-//   return null;
-// }
-function readBatteryLevel() {
-    return new Promise((resolve) => {
-        const client = dgram.createSocket('udp4');
-        const message = Buffer.from([0x01]); // Abfrage für DS4Windows UDP-Server
-        client.send(message, 0, message.length, 26760, '127.0.0.1', (err) => {
-            if (err) {
-                console.error("Fehler beim Senden an DS4Windows:", err);
-                client.close();
-                return resolve(null);
-            }
-        });
-        client.once('message', (msg) => {
-            const battery = msg[30]; // Akkustand 0–10
-            const charging = msg[31] === 1; // 1 = wird geladen
-            const level = Math.min(battery, 10) * 10;
-            console.log(`DS4Windows: Akku=${level}%, Laden=${charging}`);
-            client.close();
-            resolve({ level, charging });
-        });
-        setTimeout(() => {
-            console.warn("DS4Windows antwortet nicht.");
-            client.close();
-            resolve(null);
-        }, 1000);
+const node_hid_1 = __importDefault(require("node-hid"));
+electron_1.app.setAppUserModelId('com.Puder.ps4-akku-monitor');
+const VENDOR_ID = 0x054C;
+const PRODUCT_IDS = [0x05C4, 0x09CC];
+const POLL_INTERVAL = 10000;
+const LOW_BATTERY_THRESHOLD = 10;
+let warned = false;
+function showToast(level) {
+    const toast = new electron_1.Notification({
+        title: 'PS4 Controller Akku niedrig',
+        body: `Nur noch ${level}% übrig!`
     });
+    toast.show();
+}
+function openController() {
+    const devs = node_hid_1.default.devices().filter(d => d.vendorId === VENDOR_ID && PRODUCT_IDS.includes(d.productId));
+    if (!devs.length)
+        return null;
+    const info = devs.find(d => d.productId === 0x09CC) || devs[0];
+    try {
+        return new node_hid_1.default.HID(info.path);
+    }
+    catch (_a) {
+        return null;
+    }
+}
+function readBatteryLevel() {
+    return __awaiter(this, void 0, void 0, function* () {
+        const dev = openController();
+        if (!dev)
+            return null;
+        return new Promise(resolve => {
+            dev.read((err, data) => {
+                dev.close();
+                if (err || !data)
+                    return resolve(null);
+                const OFFSET = 32;
+                const b = data[OFFSET];
+                const rawNibble = b & 0x0F;
+                const cableState = (b >> 4) & 0x01;
+                let batteryLevel = rawNibble;
+                if (!cableState)
+                    batteryLevel++;
+                if (batteryLevel > 10)
+                    batteryLevel = 10;
+                const level = batteryLevel * 10;
+                const charging = cableState === 1 && rawNibble <= 10;
+                resolve({ level, charging });
+            });
+        });
+    });
+}
+function startBatteryMonitor() {
+    setInterval(() => __awaiter(this, void 0, void 0, function* () {
+        const info = yield readBatteryLevel();
+        if (!info)
+            return;
+        if (info.level < LOW_BATTERY_THRESHOLD && !warned) {
+            const akkustand = info.level;
+            const laden = info.charging;
+            showToast(info.level);
+            warned = true;
+        }
+        else if (info.level >= LOW_BATTERY_THRESHOLD) {
+            warned = false;
+        }
+    }), POLL_INTERVAL);
 }
 function createWindow() {
     const win = new electron_1.BrowserWindow({
@@ -104,12 +121,14 @@ function createWindow() {
         height: 400,
         webPreferences: {
             preload: path.join(__dirname, 'preload.js'),
+            contextIsolation: true,
         },
     });
     win.loadFile('renderer.html');
 }
 electron_1.app.whenReady().then(() => {
     createWindow();
+    startBatteryMonitor();
 });
 electron_1.ipcMain.handle('get-battery', () => __awaiter(void 0, void 0, void 0, function* () {
     return yield readBatteryLevel();
