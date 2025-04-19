@@ -1,4 +1,5 @@
 # Compiled output
+/.vscode
 /release-builds
 /dist
 /tmp
