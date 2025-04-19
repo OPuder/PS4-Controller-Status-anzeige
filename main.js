@@ -48,88 +48,144 @@ Object.defineProperty(exports, "__esModule", { value: true });
 const electron_1 = require("electron");
 const path = __importStar(require("path"));
 const node_hid_1 = __importDefault(require("node-hid"));
-electron_1.app.setAppUserModelId('com.Puder.ps4-akku-monitor');
+// AppUserModelID für Windows‑Toasts
+electron_1.app.setAppUserModelId('com.ps4-akku-monitor');
+// Konstanten für Sony DS4 Controller
 const VENDOR_ID = 0x054C;
-const PRODUCT_IDS = [0x05C4, 0x09CC];
-const POLL_INTERVAL = 10000;
-const LOW_BATTERY_THRESHOLD = 10;
-let warned = false;
-function showToast(level) {
-    const toast = new electron_1.Notification({
-        title: 'PS4 Controller Akku niedrig',
-        body: `Nur noch ${level}% übrig!`
-    });
-    toast.show();
-}
-function openController() {
-    const devs = node_hid_1.default.devices().filter(d => d.vendorId === VENDOR_ID && PRODUCT_IDS.includes(d.productId));
-    if (!devs.length)
-        return null;
-    const info = devs.find(d => d.productId === 0x09CC) || devs[0];
-    try {
-        return new node_hid_1.default.HID(info.path);
-    }
-    catch (_a) {
-        return null;
-    }
-}
-function readBatteryLevel() {
-    return __awaiter(this, void 0, void 0, function* () {
-        const dev = openController();
-        if (!dev)
-            return null;
-        return new Promise(resolve => {
-            dev.read((err, data) => {
-                dev.close();
-                if (err || !data)
-                    return resolve(null);
-                const OFFSET = 32;
-                const b = data[OFFSET];
-                const rawNibble = b & 0x0F;
-                const cableState = (b >> 4) & 0x01;
-                let batteryLevel = rawNibble;
-                if (!cableState)
-                    batteryLevel++;
-                if (batteryLevel > 10)
-                    batteryLevel = 10;
-                const level = batteryLevel * 10;
-                const charging = cableState === 1 && rawNibble <= 10;
-                resolve({ level, charging });
-            });
-        });
-    });
-}
-function startBatteryMonitor() {
-    setInterval(() => __awaiter(this, void 0, void 0, function* () {
-        const info = yield readBatteryLevel();
-        if (!info)
-            return;
-        if (info.level < LOW_BATTERY_THRESHOLD && !warned) {
-            const akkustand = info.level;
-            const laden = info.charging;
-            showToast(info.level);
-            warned = true;
-        }
-        else if (info.level >= LOW_BATTERY_THRESHOLD) {
-            warned = false;
-        }
-    }), POLL_INTERVAL);
-}
+const PID_BLUETOOTH = 0x09CC;
+const PID_USB = 0x05C4;
+// Interval und Schwellenwert (für Benachrichtigungen, falls genutzt)
+const LOW_BATTERY_THRESHOLD = 10; // in Prozent
+// Globale Variable für aktuellen Akkustand
+let currentBattery = { level: 0, charging: false };
+let warnedLow = false; // ob Low-Battery-Warnung schon gezeigt wurde
+// Konstanten für XInput-Abfrage
+const RECONNECT_DELAY = 2000;
+const CHECK_INTERVAL = 2000;
+let mainWindow;
+/** GUI‑Fenster erzeugen und IPC‑Listener für Updates einrichten */
 function createWindow() {
-    const win = new electron_1.BrowserWindow({
-        width: 600,
-        height: 400,
+    mainWindow = new electron_1.BrowserWindow({
+        width: 460, // statt 400
+        height: 430, // statt 150
         webPreferences: {
             preload: path.join(__dirname, 'preload.js'),
-            contextIsolation: true,
-        },
+            contextIsolation: true
+        }
     });
-    win.loadFile('renderer.html');
+    mainWindow.loadFile('renderer.html');
 }
+// Hilfsfunktion: Full-Mode aktivieren (nur für BT-Geräte sinnvoll)
+function enableFullMode(device) {
+    try {
+        const result = device.getFeatureReport(0x02, 37);
+        console.log("Full-Mode Feature-Report 0x02 abgefragt, Bytes empfangen:", result.length);
+    }
+    catch (err) {
+        console.warn("Full-Mode Aktivierung fehlgeschlagen:", err);
+    }
+}
+// Hilfsfunktion: Akkustand aus einem Input-Report-Buffer auslesen
+function parseBattery(data) {
+    const HID_OFFSET = 32;
+    const batteryByte = data[HID_OFFSET];
+    const levelNibble = batteryByte & 0x0F;
+    const levelPercent = Math.round(levelNibble / 8.05 * 100);
+    const usbConnected = Boolean(batteryByte & 0x10);
+    const charging = usbConnected && levelPercent < 100;
+    return { level: levelPercent, charging };
+}
+// Startet das Monitoring des Akkus
+function startBatteryMonitor() {
+    // 1. Suche das aktuelle Controller‑Info-Objekt (inkl. path)
+    const devInfo = node_hid_1.default.devices().find(d => d.vendorId === VENDOR_ID &&
+        [PID_BLUETOOTH, PID_USB].includes(d.productId));
+    // 2. Kein Controller gefunden → Disconnect‑Event, Retry
+    if (!devInfo) {
+        console.warn(`Kein Controller – nächster Versuch in ${RECONNECT_DELAY / 1000}s`);
+        mainWindow === null || mainWindow === void 0 ? void 0 : mainWindow.webContents.send('battery-disconnected');
+        return setTimeout(startBatteryMonitor, RECONNECT_DELAY);
+    }
+    // 3. Öffne das HID‑Handle
+    let device;
+    try {
+        device = new node_hid_1.default.HID(devInfo.path);
+    }
+    catch (err) {
+        console.error('HID open failed:', err);
+        mainWindow === null || mainWindow === void 0 ? void 0 : mainWindow.webContents.send('battery-disconnected');
+        return setTimeout(startBatteryMonitor, RECONNECT_DELAY);
+    }
+    // 4. Bluetooth Full‑Mode einschalten
+    if (devInfo.productId === PID_BLUETOOTH) {
+        enableFullMode(device);
+    }
+    // 5. Polling‑Checker, ob der Controller noch verbunden ist
+    const checker = setInterval(() => {
+        const paths = node_hid_1.default.devices().map(d => d.path);
+        if (!paths.includes(devInfo.path)) {
+            console.log('Controller path nicht mehr vorhanden – Cleanup & Reconnect');
+            cleanup();
+        }
+    }, CHECK_INTERVAL);
+    // 6. Cleanup‑Routine
+    const cleanup = () => {
+        clearInterval(checker);
+        device.removeListener('data', onData);
+        device.removeListener('error', onError);
+        try {
+            device.close();
+        }
+        catch (_a) { }
+        mainWindow === null || mainWindow === void 0 ? void 0 : mainWindow.webContents.send('battery-disconnected');
+        setTimeout(startBatteryMonitor, RECONNECT_DELAY);
+    };
+    // 7. Daten‑Callback
+    const onData = (data) => {
+        const info = parseBattery(data);
+        currentBattery = info;
+        console.log(`[HID DATA] Akkustand: ${info.level}%  charging: ${info.charging}`);
+        mainWindow === null || mainWindow === void 0 ? void 0 : mainWindow.webContents.send('battery-update', info);
+        if (info.level < LOW_BATTERY_THRESHOLD && !warnedLow) {
+            showToast(info.level);
+            warnedLow = true;
+        }
+        else if (info.level >= LOW_BATTERY_THRESHOLD) {
+            warnedLow = false;
+        }
+    };
+    // 8. Error‑Callback
+    const onError = (err) => {
+        console.error('Controller-Verbindung verlorenen (error event):', err);
+        cleanup();
+    };
+    // 9. Listener registrieren
+    device.on('data', onData);
+    device.on('error', onError);
+}
+// Hilfsfunktion: Toast-Notification bei niedrigem Akku
+function showToast(level) {
+    new electron_1.Notification({
+        title: 'PS4 Controller Akku niedrig',
+        body: `Nur noch ${level}% übrig!`,
+    }).show();
+}
+// Hilfsfunktion: GUI aktualisieren
+function sendUpdate(info) {
+    if ((mainWindow === null || mainWindow === void 0 ? void 0 : mainWindow.webContents) && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('battery-update', info);
+    }
+}
+function sendDisconnected() {
+    if ((mainWindow === null || mainWindow === void 0 ? void 0 : mainWindow.webContents) && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('battery-disconnected');
+    }
+}
+// ... Aufruf beim Start der App:
 electron_1.app.whenReady().then(() => {
     createWindow();
     startBatteryMonitor();
+    // IPC-Handler einrichten für manuelle Abfrage
+    electron_1.ipcMain.handle('get-battery', () => __awaiter(void 0, void 0, void 0, function* () {
+    }));
 });
-electron_1.ipcMain.handle('get-battery', () => __awaiter(void 0, void 0, void 0, function* () {
-    return yield readBatteryLevel();
-}));

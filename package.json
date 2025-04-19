@@ -4,11 +4,13 @@
   "main": "main.js",
   "scripts": {
     "start": "tsc && electron .",
-    "build": "tsc && electron-builder"
+    "build": "tsc && electron-builder",
+     "test-xinput-mjs": "node scripts/test-xinput.mjs"
   },
   "dependencies": {
     "dgram": "^1.0.1",
-    "node-hid": "^3.1.2"
+    "node-hid": "^3.1.2",
+    "xinput-ffi": "^4.0.2"
   },
   "devDependencies": {
     "@types/node": "^22.14.0",
